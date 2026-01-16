@@ -7,7 +7,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @RequiredArgsConstructor
@@ -18,7 +21,8 @@ public class CodeCache {
   private final Map<String, Code> codeByKey = new HashMap<>();
 
   // 애플리케이션 기동 시점에 맵에 저장
-  @PostConstruct
+  @EventListener(ApplicationReadyEvent.class)
+  @Transactional(readOnly = true)
   public void init() {
     List<Code> codes = codeRepository.findAll();
     for (Code code : codes) {
