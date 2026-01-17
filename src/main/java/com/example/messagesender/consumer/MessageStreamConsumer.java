@@ -5,17 +5,30 @@ import com.example.messagesender.dto.MessageRequestDto;
 import com.example.messagesender.service.MessageProcessService;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ObjectRecord;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MessageStreamConsumer {
 
   private final MessageProcessService messageProcessService;
-  private final RedisTemplate<String, Object> redisTemplate;
+  private final StringRedisTemplate stringRedisTemplate;
+
+  @Value("${redis.stream.message.key}")
+  private String streamKey;
+
+  @Value("${redis.stream.message.group}")
+  private String group;
+
+  @Value("${redis.stream.message.consumer}")
+  private String consumerName;
 
   public void onMessage(MapRecord<String, String, String> message) {
 
@@ -27,22 +40,18 @@ public class MessageStreamConsumer {
       MessageRequestDto requestDto = new MessageRequestDto(id, channel, purpose);
       messageProcessService.process(requestDto);
 
-      redisTemplate.opsForStream().acknowledge(
-          message.getStream(),
-          RedisStreamConfig.GROUP,
+      Long acked = stringRedisTemplate.opsForStream().acknowledge(
+          streamKey,
+          group,
           message.getId()
       );
+      log.info("ACK result = {}, messageId={}", acked, message.getId());
 
       System.out.println(
           "메세지 전송 처리 완료 messageSendResultID: " + requestDto.getMessageSendResultId());
     } catch (Exception e) { // 예외 발생 시 ACK 처리 하지 않고 PENDING 유지
-      throw e;
+      log.error("메시지 처리 실패. pending 유지", e);
     }
-
-  }
-
-  public String getName() {
-    return UUID.randomUUID().toString();
   }
 }
 

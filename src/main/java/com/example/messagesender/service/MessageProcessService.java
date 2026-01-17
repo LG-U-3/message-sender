@@ -65,6 +65,11 @@ public class MessageProcessService {
     // MessageTemplate template = result.getTemplate();
 
     // TODO: Sender 선택 및 발송: EmailSenderMockService, SmsSenderMockService
+    try {
+      Thread.sleep(100); // 0.1초 지연
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
     System.out.println("메시지 발송완료...! " + dto);
     // 채널에 맞게 sender를 호출하는 역할
 //    MessageSender sender =

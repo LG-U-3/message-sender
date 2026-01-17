@@ -1,0 +1,33 @@
+server:
+  port: 8010
+spring:
+  application:
+    name: message-sender
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  flyway:
+    enabled: false
+
+  jpa:
+    open-in-view: false
+
+  data:
+    redis:
+      host: redis
+      port: 6379
+
+redis:
+  stream:
+    message:
+      key: message-stream
+      group: message-group
+      consumer: ${HOSTNAME}   # 컨테이너마다 자동으로 다른 consumer
+
+logging:
+  level:
+    root: INFO
