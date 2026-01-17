@@ -33,7 +33,13 @@ public class CodeCache {
   }
 
   public Code get(String group, Enum<?> code) {
-    return codeByKey.get(group + ":" + code.name());
+    Code result = codeByKey.get(group + ":" + code.name());
+    if (result == null) {
+      throw new IllegalStateException(
+          "Code not found: " + group + ":" + code.name()
+      );
+    }
+    return result;
   }
 
   public Long getId(String group, Enum<?> code) {
