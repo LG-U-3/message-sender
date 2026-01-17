@@ -1,0 +1,23 @@
+server:
+  port: 8010
+
+spring:
+  application:
+    name: message-sender
+
+  datasource:
+    url: jdbc:mysql://mysql:3306/billing_system
+    username: billing
+    password: billing
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  data:
+    redis:
+      host: redis
+      port: 6379
+
+# (커스텀) Stream/Group 이름
+# - IDE에서 unknown property 경고가 뜰 수 있는데, @ConfigurationProperties로 바인딩하면 해소됨
+message:
+  stream: message-stream
+  group: message-group
