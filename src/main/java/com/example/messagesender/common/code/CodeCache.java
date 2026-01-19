@@ -1,4 +1,4 @@
-package com.example.messagesender.common.code;
+햣 package com.example.messagesender.common.code;
 
 import com.example.messagesender.domain.code.Code;
 import com.example.messagesender.repository.CodeRepository;
