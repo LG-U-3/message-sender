@@ -70,7 +70,6 @@ public class MessageProcessService {
     String content = "생성된 템플릿...";
     Long messageId = dto.getMessageSendResultId();
 
-    // TODO: Sender 선택 및 발송: EmailSenderMockService, SmsSenderMockService
     MessageChannel channel =
         MessageChannel.valueOf(result.getChannel().getCode());
     MessageSender sender =
@@ -93,10 +92,16 @@ public class MessageProcessService {
           );
     }
 
-    // TODO: 전송 실패 시 실패 처리후 종료
-    // if(sendResultDto.isSuccess()) { ... }
+    SendResult sendResult = sender.mockSend(sendRequest);
+
+    if (!sendResult.isSuccess()) {
+      messageSendResultRepository.markCompleteStatus(dto.getMessageSendResultId(), STATUS_FAILED);
+      System.out.println("MESSAGE SEND REQUEST FAILED: " + dto.getMessageSendResultId());
+      return;
+    }
 
     // 성공 처리
-    messageSendResultRepository.markSuccess(dto.getMessageSendResultId(), STATUS_SUCCESS);
+    messageSendResultRepository.markCompleteStatus(dto.getMessageSendResultId(), STATUS_SUCCESS);
+    System.out.println("MESSAGE SEND REQUEST SUCCESS: " + dto.getMessageSendResultId());
   }
 }

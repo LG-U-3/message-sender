@@ -8,7 +8,6 @@ import org.springframework.data.repository.query.Param;
 
 public interface MessageSendResultRepository extends JpaRepository<MessageSendResult, Long> {
 
-
   @Modifying
   @Query("""
           update MessageSendResult m
@@ -27,12 +26,12 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
   @Modifying
   @Query("""
           update MessageSendResult m
-             set m.status.id = :successStatusId,
+             set m.status.id = :statusId,
                  m.processedAt = CURRENT_TIMESTAMP
            where m.id = :id
       """)
-  void markSuccess(
+  void markCompleteStatus(
       @Param("id") Long id,
-      @Param("successStatusId") Long successStatusId
+      @Param("statusId") Long statusId
   );
 }

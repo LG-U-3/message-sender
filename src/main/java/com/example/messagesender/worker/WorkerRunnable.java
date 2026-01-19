@@ -39,6 +39,7 @@ public class WorkerRunnable implements Runnable {
     try {
       messageProcessService.process(request);
 
+      System.out.println("메시지 전송 처리 완료: " + request.getMessageSendResultId());
       ack();
     } catch (Exception e) { // 예외 발생 시 ACK 처리 하지 않고 PENDING 유지
       log.error("메시지 처리 실패. pending 유지", e);
