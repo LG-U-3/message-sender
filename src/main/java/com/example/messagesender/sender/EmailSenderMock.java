@@ -2,7 +2,8 @@ package com.example.messagesender.sender;
 
 import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.dto.MessageRequestDto;
-import com.example.messagesender.dto.MessageSendResultDto;
+import com.example.messagesender.dto.send.SendRequest;
+import com.example.messagesender.dto.send.SendResult;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ThreadLocalRandom;
@@ -19,19 +20,19 @@ public class EmailSenderMock implements MessageSender {
   }
 
   @Override
-  public MessageSendResultDto mockSend(MessageRequestDto request) {
+  public SendResult mockSend(SendRequest request) {
     // TODO: nextAttemptAt 1초 후 예약(성범)
     return this.send(request);
   }
 
   @Override
-  public MessageSendResultDto send(MessageRequestDto request) {
+  public SendResult send(SendRequest request) {
     // 0~99 중 0~98 성공(99%), 99 실패(1%)
     int r = ThreadLocalRandom.current().nextInt(100);
 
     if (r < 99) {
-      return new MessageSendResultDto(true);
+      return SendResult.ok();
     }
-    return new MessageSendResultDto(true, "MOCK_EMAIL_FAILED");
+    return SendResult.fail("EMAIL_SEND_FAILED");
   }
 }

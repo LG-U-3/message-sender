@@ -2,10 +2,14 @@ package com.example.messagesender.service;
 
 import com.example.messagesender.common.code.CodeCache;
 import com.example.messagesender.common.code.enums.CodeGroups;
+import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.common.code.enums.MessageSendStatus;
 import com.example.messagesender.domain.message.MessageSendResult;
 import com.example.messagesender.dto.MessageRequestDto;
-import com.example.messagesender.dto.MessageSendResultDto;
+import com.example.messagesender.dto.send.EmailSendRequest;
+import com.example.messagesender.dto.send.SendRequest;
+import com.example.messagesender.dto.send.SendResult;
+import com.example.messagesender.dto.send.SmsSendRequest;
 import com.example.messagesender.repository.MessageSendResultRepository;
 import com.example.messagesender.repository.MessageTemplateRepository;
 import com.example.messagesender.sender.MessageSender;
@@ -63,12 +67,31 @@ public class MessageProcessService {
 
     // TODO: 메세지 템플릿 생성
     // MessageTemplate template = result.getTemplate();
+    String content = "생성된 템플릿...";
+    Long messageId = dto.getMessageSendResultId();
 
     // TODO: Sender 선택 및 발송: EmailSenderMockService, SmsSenderMockService
-    // 채널에 맞게 sender를 호출하는 역할
+    MessageChannel channel =
+        MessageChannel.valueOf(result.getChannel().getCode());
     MessageSender sender =
-        messageSenderFactory.getSender(result.getChannel());
-    MessageSendResultDto sendResultDto = sender.send(dto);
+        messageSenderFactory.getSender(channel);
+
+    SendRequest sendRequest;
+    if (channel == MessageChannel.EMAIL) {
+      sendRequest =
+          new EmailSendRequest(
+              messageId,
+              "email@test.com",
+              content
+          );
+    } else {
+      sendRequest =
+          new SmsSendRequest(
+              messageId,
+              "010-1234-1234",
+              content
+          );
+    }
 
     // TODO: 전송 실패 시 실패 처리후 종료
     // if(sendResultDto.isSuccess()) { ... }

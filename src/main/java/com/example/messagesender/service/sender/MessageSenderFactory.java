@@ -22,7 +22,7 @@ public class MessageSenderFactory {
         ));
   }
 
-  public MessageSender getSender(Code channel) {
+  public MessageSender getSender(MessageChannel channel) {
     MessageSender sender = senderMap.get(channel);
     if (sender == null) {
       throw new IllegalArgumentException("Unsupported channel: " + channel);
