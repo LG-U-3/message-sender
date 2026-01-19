@@ -1,49 +1,51 @@
 package com.example.messagesender.consumer;
 
+import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.service.MessageProcessService;
 import com.example.messagesender.worker.WorkerRunnable;
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.stream.MapRecord;
-import org.springframework.data.redis.stream.StreamListener;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Component;
-
-import java.net.InetAddress;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.RecordId;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.stream.StreamListener;
+import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 
 @Component
 @RequiredArgsConstructor
-public class MessageStreamConsumer
-    implements StreamListener<String, MapRecord<String, String, String>> {
-
-  @Value("${message.stream:message-stream}")
-  private String streamKey;
-
-  @Value("${message.group:message-group}")
-  private String group;
+public class MessageStreamConsumer implements
+    StreamListener<String, MapRecord<String, String, String>> {
 
   private final ExecutorService workerExecutorService;
+  private final MessageProcessService messageProcessService;
   private final StringRedisTemplate redisTemplate;
 
-  // 인스턴스별 유니크한 consumer name (스케일아웃 필수)
-  public String consumerName() {
-    String host = "unknown";
-    try {
-      host = InetAddress.getLocalHost().getHostName();
-    } catch (Exception ignored) {
-    }
-    return "message-sender-" + host + "-" + UUID.randomUUID().toString().substring(0, 8);
-  }
+  @Value("${redis.stream.message.key:message-stream}")
+  private String streamKey;
+
+  @Value("${redis.stream.message.group:message-group}")
+  private String group;
+
+  @Value("${redis.stream.message.consumer}")
+  private String consumerName;
 
   @Override
   public void onMessage(MapRecord<String, String, String> message) {
-    String recordId = message.getId().getValue();
-    Map<String, String> body = message.getValue();
+    Long id = Long.valueOf(message.getValue().get("messageSendResultId"));
+    String channel = message.getValue().get("channel");
+    String purpose = message.getValue().get("purpose");
+    MessageRequestDto requestDto = new MessageRequestDto(id, channel, purpose);
+
+    RecordId messageId = message.getId();
 
     workerExecutorService
-        .submit(new WorkerRunnable(streamKey, group, recordId, body, redisTemplate));
-                // 이 부분만 서비스 쪽으로 넘기면 될 것 같습니다.
+        .submit(
+            new WorkerRunnable(messageProcessService, streamKey, group, messageId, requestDto,
+                redisTemplate));
+  }
+
+  public String consumerName() {
+    return consumerName;
   }
 }

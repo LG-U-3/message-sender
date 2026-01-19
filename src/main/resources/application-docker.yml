@@ -12,16 +12,11 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    validate-on-migrate: false
-    clean-disabled: true
+    enabled: false
 
   jpa:
     hibernate:
       ddl-auto: none
-    open-in-view: false
 
   data:
     redis:
@@ -31,3 +26,16 @@ spring:
 message:
   stream: message-stream
   group: message-group
+
+redis:
+  stream:
+    message:
+      key: message-stream
+      group: message-group
+      poll-timeout-ms: 500
+      batch-size: 10
+      consumer: ${HOSTNAME}   # 컨테이너마다 자동으로 다른 consumer
+
+logging:
+  level:
+    root: INFO
