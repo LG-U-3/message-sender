@@ -8,8 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface MessageSendResultRepository extends JpaRepository<MessageSendResult, Long> {
 
-  // 선점: WAITING/FAILED -> PROCESSING
-  // 여기서는 processedAt을 절대 찍지 않는다 (확정 시점에만 찍기)
+  // 선점만: processedAt은 여기서 X
   @Modifying
   @Query("""
           update MessageSendResult m
@@ -21,7 +20,7 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
   int markProcessing(@Param("id") Long id, @Param("processingStatusId") Long processingStatusId,
       @Param("waitingStatusId") Long waitingStatusId, @Param("failedStatusId") Long failedStatusId);
 
-  // 성공 확정: PROCESSING일 때만 + processed_at은 여기서
+  // 성공 확정: PROCESSING에서만 + processed_at 여기서 O
   @Modifying
   @Query("""
           update MessageSendResult m
@@ -34,7 +33,7 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
   int markSuccess(@Param("id") Long id, @Param("processingStatusId") Long processingStatusId,
       @Param("successStatusId") Long successStatusId);
 
-  // 실패 확정: PROCESSING일 때만 + processed_at은 여기서
+  // 실패 확정: PROCESSING에서만 + processed_at 여기서 O
   @Modifying
   @Query("""
           update MessageSendResult m

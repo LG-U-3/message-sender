@@ -33,8 +33,6 @@ public class MessageProcessService {
   private final MessageTemplateRepository messageTemplateRepository;
   private final MessageSenderFactory messageSenderFactory;
   private final CodeCache codeCache;
-
-  // Email 1초 뒤 확정용 타이머 풀 (ConsumerConfig에서 Bean으로 제공)
   private final ScheduledExecutorService emailDelayScheduler;
 
   // 비동기 스레드에서 DB 업데이트 트랜잭션 보장
@@ -61,35 +59,31 @@ public class MessageProcessService {
     MessageSendResult result = messageSendResultRepository.findById(dto.getMessageSendResultId())
         .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
 
-    // WAITING/FAILED인 경우에만 PROCESSING 선점(중복 방지)
+    // 중복 방지 선점: WAITING/FAILED -> PROCESSING
     int updated = messageSendResultRepository.markProcessing(dto.getMessageSendResultId(),
         STATUS_PROCESSING, STATUS_WAITING, STATUS_FAILED);
+    if (updated == 0)
+      return;
 
-    if (updated == 0) {
-      return; // 이미 다른 워커가 처리중이거나 완료됨
-    }
-
-    // TODO: 템플릿 추후 구성 지금은 "1초 뒤 확정" 구조가 최우선
+    // TODO: 템플릿/수신자 구성은 추후
     String content = "생성된 템플릿...";
     Long messageId = dto.getMessageSendResultId();
 
-    // 채널별 sender 선택
     MessageChannel channel = MessageChannel.valueOf(result.getChannel().getCode());
     MessageSender sender = messageSenderFactory.getSender(channel);
 
-    // 채널별 요청 DTO
+    // 채널별 request 생성
     SendRequest sendRequest;
     if (channel == MessageChannel.EMAIL) {
       sendRequest = new EmailSendRequest(messageId, "email@test.com", content);
 
-      // 핵심: SUCCESS/FAILED 확정을 “반드시 1초 뒤”에 하도록 비동기 예약
+      // Email은 “SUCCESS/FAILED 확정”을 반드시 1초 뒤에
       emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, sendRequest), 1,
           TimeUnit.SECONDS);
-
-      return; // worker는 즉시 반환 (sleep 없이 ACK 진행)
+      return; // worker 즉시 반환 (sleep 없음)
     }
 
-    // SMS 즉시 처리
+    // SMS는 즉시 처리/확정
     sendRequest = new SmsSendRequest(messageId, "010-1234-1234", content);
     SendResult sendResult;
     try {
@@ -108,10 +102,9 @@ public class MessageProcessService {
       sendResult = SendResult.fail("SENDER_EXCEPTION:" + e.getClass().getSimpleName());
     }
 
-    // 람다에서 쓸 final 값
     final boolean success = sendResult.isSuccess();
 
-    // 비동기 스레드에서 DB 업데이트는 트랜잭션으로 감싸서 처리
+    // 비동기 스레드 트랜잭션
     transactionTemplate.execute(status -> {
       if (success) {
         messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
