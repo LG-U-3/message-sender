@@ -35,4 +35,18 @@ public class ConsumerConfig {
     return new ThreadPoolExecutor(workerThreads, workerThreads, 0L, TimeUnit.MILLISECONDS, queue,
         threadFactory, rejectHandler);
   }
+
+  @Bean(destroyMethod = "shutdown")
+  public ScheduledExecutorService emailDelayScheduler() {
+    ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(4,
+        r -> {
+          Thread t = new Thread(r);
+          t.setName("email-delay-" + t.getId());
+          t.setDaemon(true);
+          return t;
+        });
+    exec.setRemoveOnCancelPolicy(true);
+    return exec;
+  }
+
 }
