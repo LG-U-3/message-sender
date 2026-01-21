@@ -103,7 +103,10 @@ public class MessageProcessService {
           billingSettlementRepository, objectMapper, chargedHistoryRepository);
 
       Map<String, String> values = resolver.resolve(result, template);
-
+      // values 전체 로
+      log.info("[VALUES] messageId={} templateId={}", messageId, template.getId());
+      values.forEach((k, v) -> log.info("  - {} = {}", k, v));
+      
       MessageTemplateEngine engine = new MessageTemplateEngine();
       rendered = engine.render(template.getTitle(), template.getBody(), values);
 
