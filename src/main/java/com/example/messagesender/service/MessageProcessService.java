@@ -1,25 +1,38 @@
 package com.example.messagesender.service;
 
 import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+
 import com.example.messagesender.common.code.CodeCache;
 import com.example.messagesender.common.code.enums.CodeGroups;
+import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.common.code.enums.MessageSendStatus;
 import com.example.messagesender.domain.message.MessageSendResult;
 import com.example.messagesender.domain.message.MessageTemplate;
 import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.dto.send.EmailSendRequest;
+import com.example.messagesender.dto.send.SendRequest;
+import com.example.messagesender.dto.send.SendResult;
+import com.example.messagesender.dto.send.SmsSendRequest;
 import com.example.messagesender.repository.BillingSettlementRepository;
 import com.example.messagesender.repository.ChargedHistoryRepository;
 import com.example.messagesender.repository.MessageSendResultRepository;
 import com.example.messagesender.repository.MessageTemplateRepository;
 import com.example.messagesender.repository.UserRepository;
+import com.example.messagesender.sender.MessageSender;
+import com.example.messagesender.service.sender.MessageSenderFactory;
 import com.example.messagesender.service.template.MessageTemplateEngine;
 import com.example.messagesender.service.template.RenderedMessage;
 import com.example.messagesender.service.template.TemplateValueResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -29,10 +42,15 @@ public class MessageProcessService {
 
   private final MessageSendResultRepository messageSendResultRepository;
   private final MessageTemplateRepository messageTemplateRepository;
-  // private final MessageSenderFactory messageSenderFactory;
+  private final MessageSenderFactory messageSenderFactory;
 
   private final CodeCache codeCache;
+  private final ScheduledExecutorService emailDelayScheduler;
 
+  // 비동기 스레드에서 DB 업데이트 트랜잭션 보장
+  private final TransactionTemplate transactionTemplate;
+
+  // 템플릿 치환에 필요한 데이터 소스들 (네 담당 영역)
   private final UserRepository userRepository;
   private final BillingSettlementRepository billingSettlementRepository;
   private final ObjectMapper objectMapper;
@@ -51,69 +69,115 @@ public class MessageProcessService {
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.WAITING);
     this.STATUS_SUCCESS =
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.SUCCESS);
-    this.STATUS_FAILED = codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.FAILED);
+    this.STATUS_FAILED =
+        codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.FAILED);
   }
 
   public void process(MessageRequestDto dto) {
-    System.out.println(">>> ENTER process, id=" + dto.getMessageSendResultId());
+
     MessageSendResult result = messageSendResultRepository.findById(dto.getMessageSendResultId())
         .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
 
-    // WAITING or FAILED인 경우에만 PROCESSING으로 변경: updated > 0
-    int updated = messageSendResultRepository.markProcessing(dto.getMessageSendResultId(),
-        STATUS_PROCESSING, STATUS_WAITING, STATUS_FAILED);
-    if (updated == 0) { // 처리 대상이 아닌경우 종료
-      System.out.println(">>> SKIP process (updated=0). currentStatus not WAITING/FAILED. id="
-          + dto.getMessageSendResultId());
-      return;
+    // 중복 방지 선점: WAITING/FAILED -> PROCESSING
+    int updated = messageSendResultRepository.markProcessing(
+        dto.getMessageSendResultId(),
+        STATUS_PROCESSING,
+        STATUS_WAITING,
+        STATUS_FAILED
+    );
+    if (updated == 0) {
+      return; // 이미 다른 워커가 처리 중이거나 처리 대상 아님
     }
 
-    // TODO: 메세지 템플릿 생성
-    try {
-      // 1) 템플릿 조회
-      MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
-          .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
+    final Long messageId = dto.getMessageSendResultId();
 
-      // 2) values Map 자동 생성 (User + Settlement.detail_json)
-      TemplateValueResolver resolver = new TemplateValueResolver(userRepository,
-          billingSettlementRepository, objectMapper, chargedHistoryRepository // 추가
+    // 1) 템플릿 치환(네 담당 로직)
+    RenderedMessage rendered;
+    try {
+      MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
+          .orElseThrow(() -> new IllegalArgumentException("템플릿 없음"));
+
+      TemplateValueResolver resolver = new TemplateValueResolver(
+          userRepository,
+          billingSettlementRepository,
+          objectMapper,
+          chargedHistoryRepository
       );
 
       Map<String, String> values = resolver.resolve(result, template);
 
-      // 3) 템플릿 렌더링 (치환)
       MessageTemplateEngine engine = new MessageTemplateEngine();
-      RenderedMessage rendered = engine.render(template.getTitle(), template.getBody(), values);
+      rendered = engine.render(template.getTitle(), template.getBody(), values);
 
-      // TODO: sender로 rendered 넘기기
-      System.out.println("TITLE=" + rendered.getTitle());
-      System.out.println("BODY=" + rendered.getBody());
-      System.out.println("VALUES=" + values);
+    } catch (Exception e) {
+      // 템플릿 구성/치환 단계에서 실패하면 즉시 FAILED 확정
+      messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
+      return;
+    }
 
-      // TODO: Sender 선택 및 발송: EmailSenderMockService, SmsSenderMockService
-      try {
-        Thread.sleep(100); // 0.1초 지연
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+    // 템플릿으로부터 최종 내용 구성
+    final String content = rendered.getBody();
+
+
+    MessageChannel channel = MessageChannel.valueOf(result.getChannel().getCode());
+    MessageSender sender = messageSenderFactory.getSender(channel);
+
+    SendRequest sendRequest;
+    if (channel == MessageChannel.EMAIL) {
+      // TODO: 수신자 이메일은 추후 result/user 기반으로 채우기
+      sendRequest = new EmailSendRequest(messageId, "email@test.com", content);
+
+      // Email은 “SUCCESS/FAILED 확정”을 반드시 1초 뒤에
+      emailDelayScheduler.schedule(
+          () -> finalizeAfterDelay(messageId, sender, sendRequest),
+          1,
+          TimeUnit.SECONDS
+      );
+      return; // worker 즉시 반환 (sleep 없음)
+    }
+
+    // SMS는 즉시 처리/확정
+    // TODO: 수신자 번호는 추후 result/user 기반으로 채우기
+    sendRequest = new SmsSendRequest(messageId, "010-1234-1234", content);
+
+    SendResult sendResult;
+    try {
+      sendResult = sender.mockSend(sendRequest);
+    } catch (Exception e) {
+      sendResult = SendResult.fail("SENDER_EXCEPTION:" + e.getClass().getSimpleName());
+    }
+
+    finalizeNow(messageId, sendResult);
+  }
+
+  private void finalizeAfterDelay(Long messageId, MessageSender sender, SendRequest request) {
+    SendResult sendResult;
+    try {
+      sendResult = sender.mockSend(request);
+    } catch (Exception e) {
+      sendResult = SendResult.fail("SENDER_EXCEPTION:" + e.getClass().getSimpleName());
+    }
+
+    final boolean success = sendResult != null && sendResult.isSuccess();
+
+    // 비동기 스레드 트랜잭션
+    transactionTemplate.execute(status -> {
+      if (success) {
+        messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
+      } else {
+        messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
       }
+      return null;
+    });
+  }
 
-      System.out.println("메시지 발송완료...! " + dto);
-      // 채널에 맞게 sender를 호출하는 역할
-      // MessageSender sender =
-      // messageSenderFactory.getSender(result.getChannel());
-      // sender.send(
-      // new MessageContext(
-      // result.getUserId(),
-      // template.getTitle(),
-      // content
-      // )
-      // );
-      // TODO: 전송 실패 시 실패 처리후 종료
+  private void finalizeNow(Long messageId, SendResult sendResult) {
+    final boolean success = sendResult != null && sendResult.isSuccess();
 
-      // 성공 처리
-      messageSendResultRepository.markSuccess(dto.getMessageSendResultId(), STATUS_SUCCESS);
-    } finally {
-
+    if (success) {
+      messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
+    } else {
+      messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
     }
   }
 }

@@ -1,5 +1,6 @@
 server:
   port: 8010
+
 spring:
   application:
     name: message-sender
@@ -14,18 +15,25 @@ spring:
     enabled: false
 
   jpa:
-    open-in-view: false
+    hibernate:
+      ddl-auto: none
 
   data:
     redis:
       host: redis
       port: 6379
 
+message:
+  stream: message-stream
+  group: message-group
+
 redis:
   stream:
     message:
       key: message-stream
       group: message-group
+      poll-timeout-ms: 500
+      batch-size: 10
       consumer: ${HOSTNAME}   # 컨테이너마다 자동으로 다른 consumer
 
 logging:
