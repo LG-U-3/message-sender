@@ -1,57 +1,51 @@
 package com.example.messagesender.consumer;
 
-import com.example.messagesender.config.RedisStreamConfig;
 import com.example.messagesender.dto.MessageRequestDto;
 import com.example.messagesender.service.MessageProcessService;
-import java.util.UUID;
+import com.example.messagesender.worker.WorkerRunnable;
+import java.util.concurrent.ExecutorService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.stream.MapRecord;
-import org.springframework.data.redis.connection.stream.ObjectRecord;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Value;
 
-@Slf4j
 @Component
 @RequiredArgsConstructor
-public class MessageStreamConsumer {
+public class MessageStreamConsumer implements
+    StreamListener<String, MapRecord<String, String, String>> {
 
+  private final ExecutorService workerExecutorService;
   private final MessageProcessService messageProcessService;
-  private final StringRedisTemplate stringRedisTemplate;
+  private final StringRedisTemplate redisTemplate;
 
-  @Value("${redis.stream.message.key}")
+  @Value("${redis.stream.message.key:message-stream}")
   private String streamKey;
 
-  @Value("${redis.stream.message.group}")
+  @Value("${redis.stream.message.group:message-group}")
   private String group;
 
   @Value("${redis.stream.message.consumer}")
   private String consumerName;
 
+  @Override
   public void onMessage(MapRecord<String, String, String> message) {
+    Long id = Long.valueOf(message.getValue().get("messageSendResultId"));
+    String channel = message.getValue().get("channel");
+    String purpose = message.getValue().get("purpose");
+    MessageRequestDto requestDto = new MessageRequestDto(id, channel, purpose);
 
-    try { // 전송 완료 정상 처리 (SUCCESS or FAILED) ACK
-      Long id = Long.valueOf(message.getValue().get("messageSendResultId"));
-      String channel = message.getValue().get("channel");
-      String purpose = message.getValue().get("purpose");
+    RecordId messageId = message.getId();
 
-      MessageRequestDto requestDto = new MessageRequestDto(id, channel, purpose);
-      messageProcessService.process(requestDto);
+    workerExecutorService
+        .submit(
+            new WorkerRunnable(messageProcessService, streamKey, group, messageId, requestDto,
+                redisTemplate));
+  }
 
-      Long acked = stringRedisTemplate.opsForStream().acknowledge(
-          streamKey,
-          group,
-          message.getId()
-      );
-      log.info("ACK result = {}, messageId={}", acked, message.getId());
-
-      System.out.println(
-          "메세지 전송 처리 완료 messageSendResultID: " + requestDto.getMessageSendResultId());
-    } catch (Exception e) { // 예외 발생 시 ACK 처리 하지 않고 PENDING 유지
-      log.error("메시지 처리 실패. pending 유지", e);
-    }
+  public String consumerName() {
+    return consumerName;
   }
 }
-
