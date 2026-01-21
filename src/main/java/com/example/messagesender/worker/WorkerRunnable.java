@@ -1,31 +1,27 @@
 package com.example.messagesender.worker;
 
-import com.example.messagesender.dto.MessageRequestDto;
-import com.example.messagesender.service.MessageProcessService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-public class WorkerRunnable implements Runnable {
+import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.service.MessageProcessService;
 
-  private final MessageProcessService messageProcessService;
+public class WorkerRunnable implements Runnable {
 
   private static final Logger log = LoggerFactory.getLogger(WorkerRunnable.class);
 
+  private final MessageProcessService messageProcessService;
   private final String streamKey;
   private final String group;
   private final RecordId messageId;
   private final MessageRequestDto request;
   private final StringRedisTemplate redisTemplate;
 
-  public WorkerRunnable(
-      MessageProcessService messageProcessService,
-      String streamKey,
-      String group,
-      RecordId messageId,
-      MessageRequestDto request,
-      StringRedisTemplate redisTemplate) {
+  public WorkerRunnable(MessageProcessService messageProcessService, String streamKey, String group,
+      RecordId messageId, MessageRequestDto request, StringRedisTemplate redisTemplate) {
+
     this.messageProcessService = messageProcessService;
     this.streamKey = streamKey;
     this.group = group;
@@ -36,22 +32,32 @@ public class WorkerRunnable implements Runnable {
 
   @Override
   public void run() {
+
+    Long msrId = request.getMessageSendResultId();
+
     try {
+
       messageProcessService.process(request);
 
-      System.out.println("메시지 전송 처리 완료: " + request.getMessageSendResultId());
-      ack();
-    } catch (Exception e) { // 예외 발생 시 ACK 처리 하지 않고 PENDING 유지
-      log.error("메시지 처리 실패. pending 유지", e);
+      Long acked = ack();
+      log.info("메시지 처리 완료 -> ACK. messageSendResultId={}, acked={}", msrId, acked);
+
+    } catch (Exception e) {
+
+      try {
+        messageProcessService.markFailed(msrId, e);
+        Long acked = ack();
+        log.error("메시지 처리 중 예외(최후 처리) -> FAILED 업데이트 후 ACK. messageSendResultId={}, acked={}",
+            msrId, acked, e);
+
+      } catch (Exception fatal) {
+        // 여기서 실패하면 ACK 미수행 → pending 유지(추후 recovery(B안)에서 회수 대상)
+        log.error("FAIL-HANDLER 실패(ACK 미수행, pending 유지). messageSendResultId={}", msrId, fatal);
+      }
     }
   }
 
   private Long ack() {
-    Long acked = redisTemplate.opsForStream().acknowledge(
-        streamKey,
-        group,
-        messageId
-    );
-    return acked;
+    return redisTemplate.opsForStream().acknowledge(streamKey, group, messageId);
   }
 }

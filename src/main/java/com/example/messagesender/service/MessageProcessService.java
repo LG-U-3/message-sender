@@ -3,6 +3,7 @@ package com.example.messagesender.service;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -10,6 +11,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+
 import com.example.messagesender.common.code.CodeCache;
 import com.example.messagesender.common.code.enums.CodeGroups;
 import com.example.messagesender.common.code.enums.MessageChannel;
@@ -32,6 +34,7 @@ import com.example.messagesender.service.template.MessageTemplateEngine;
 import com.example.messagesender.service.template.RenderedMessage;
 import com.example.messagesender.service.template.TemplateValueResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -75,60 +78,87 @@ public class MessageProcessService {
 
   /**
    * Redis Stream으로 전달된 메시지 처리 진입점
+   *
+   * ✅ A안 반영(최소 수정): - process() 최상단 try/catch로 감싸서 어디서 예외가 터져도 "PROCESSING 상태가 박제"되지 않도록 가능한 경우
+   * FAILED로 확정한다.
    */
   public void process(MessageRequestDto dto) {
 
     final Long messageId = dto.getMessageSendResultId();
     log.info("[STREAM] messageSendResultId={}", messageId);
 
-    MessageSendResult result = messageSendResultRepository.findById(messageId)
-        .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
+    boolean lockedToProcessing = false; // markProcessing 성공 여부
 
-    // 처리 대상 선점 (중복 처리 방지)
-    int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
-        STATUS_WAITING, STATUS_FAILED);
-
-    if (updated == 0) {
-      log.info("[SKIP] already processed or not eligible. id={}", messageId);
-      return;
-    }
-
-    // 템플릿 치환
-    RenderedMessage rendered;
     try {
-      MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
-          .orElseThrow(() -> new IllegalArgumentException("템플릿 없음"));
+      MessageSendResult result = messageSendResultRepository.findById(messageId)
+          .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
 
-      TemplateValueResolver resolver = new TemplateValueResolver(userRepository,
-          billingSettlementRepository, objectMapper, chargedHistoryRepository);
+      // 처리 대상 선점 (중복 처리 방지)
+      int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
+          STATUS_WAITING, STATUS_FAILED);
 
-      Map<String, String> values = resolver.resolve(result, template);
-      // values 전체 로
-      log.info("[VALUES] messageId={} templateId={}", messageId, template.getId());
-      values.forEach((k, v) -> log.info("  - {} = {}", k, v));
-      
-      MessageTemplateEngine engine = new MessageTemplateEngine();
-      rendered = engine.render(template.getTitle(), template.getBody(), values);
+      if (updated == 0) {
+        log.info("[SKIP] already processed or not eligible. id={}", messageId);
+        return;
+      }
 
-      log.info("[RENDERED] title='{}'", rendered.getTitle());
-      log.info("[RENDERED] body='{}'", rendered.getBody());
+      lockedToProcessing = true;
+
+      // 템플릿 치환
+      RenderedMessage rendered;
+      try {
+        MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
+            .orElseThrow(() -> new IllegalArgumentException("템플릿 없음"));
+
+        TemplateValueResolver resolver = new TemplateValueResolver(userRepository,
+            billingSettlementRepository, objectMapper, chargedHistoryRepository);
+
+        Map<String, String> values = resolver.resolve(result, template);
+
+        log.info("[VALUES] messageId={} templateId={}", messageId, template.getId());
+        values.forEach((k, v) -> log.info("  - {} = {}", k, v));
+
+        MessageTemplateEngine engine = new MessageTemplateEngine();
+        rendered = engine.render(template.getTitle(), template.getBody(), values);
+
+        log.info("[RENDERED] title='{}'", rendered.getTitle());
+        log.info("[RENDERED] body='{}'", rendered.getBody());
+
+      } catch (Exception e) {
+        // (기존 로직 유지) 템플릿 렌더링 실패는 즉시 FAILED 확정
+        messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
+        log.error("[FAIL] template rendering failed. id={}", messageId, e);
+        return;
+      }
+
+      // 채널별 발송 처리
+      MessageChannel channel = MessageChannel.valueOf(result.getChannel().getCode());
+      MessageSender sender = messageSenderFactory.getSender(channel);
+
+      if (channel == MessageChannel.EMAIL) {
+        sendEmailWithDelay(messageId, sender, rendered.getBody());
+        return;
+      }
+
+      sendSmsImmediately(messageId, sender, rendered.getBody());
 
     } catch (Exception e) {
-      messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
-      log.error("[FAIL] template rendering failed. id={}", messageId, e);
-      return;
+      // ✅ A안 핵심: 예외가 어디서 터져도 PROCESSING 박제 방지
+      try {
+        if (lockedToProcessing) {
+          // markProcessing 성공 이후라면 PROCESSING -> FAILED 확정
+          messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
+          log.error("[FAIL] processing failed -> marked FAILED. id={}", messageId, e);
+        } else {
+          // markProcessing 이전 예외: PROCESSING 박제는 아니므로 로그만
+          // (WAITING->FAILED 전환 같은 건 합의 필요하니 여기선 안 건드림)
+          log.error("[FAIL] processing failed before markProcessing. id={}", messageId, e);
+        }
+      } catch (Exception fatal) {
+        // FAILED 업데이트조차 실패한 경우
+        log.error("[FATAL] failed to mark FAILED. id={}", messageId, fatal);
+      }
     }
-
-    // 채널별 발송 처리
-    MessageChannel channel = MessageChannel.valueOf(result.getChannel().getCode());
-    MessageSender sender = messageSenderFactory.getSender(channel);
-
-    if (channel == MessageChannel.EMAIL) {
-      sendEmailWithDelay(messageId, sender, rendered.getBody());
-      return;
-    }
-
-    sendSmsImmediately(messageId, sender, rendered.getBody());
   }
 
   /**
@@ -195,5 +225,21 @@ public class MessageProcessService {
       messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
       log.info("[FINAL] SMS FAILED id={}", messageId);
     }
+  }
+
+  // 메시지 처리 중 예외 발생 시 FAILED 상태로 확정하는 트랜잭션 (WorkerRunnable용)
+  public void markFailed(Long messageSendResultId, Exception e) {
+
+    int updated = messageSendResultRepository.markFailed(messageSendResultId, STATUS_PROCESSING,
+        STATUS_FAILED);
+
+    if (updated == 0) {
+      log.warn("markFailed skipped. messageSendResultId={}, reason={}", messageSendResultId,
+          e != null ? e.getMessage() : "unknown");
+      return;
+    }
+
+    log.error("[FAILED] messageSendResultId={} marked as FAILED. cause={}", messageSendResultId,
+        e != null ? e.getClass().getSimpleName() + ": " + e.getMessage() : "unknown", e);
   }
 }
