@@ -103,7 +103,8 @@ public class MessageProcessService {
           objectMapper,
           chargedHistoryRepository
       );
-
+      
+     
       Map<String, String> values = resolver.resolve(result, template);
 
       MessageTemplateEngine engine = new MessageTemplateEngine();
