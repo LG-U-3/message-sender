@@ -36,6 +36,10 @@ redis:
       batch-size: 100
       consumer: ${HOSTNAME}   # 컨테이너마다 자동으로 다른 consumer
 
+aes:
+  secret-key: ${AES_SECRET_KEY}
+  fixed_iv: ${AES_FIXED_IV}
+
 logging:
   level:
     root: INFO

@@ -1,5 +1,6 @@
 package com.example.messagesender.service.template;
 
+import com.example.messagesender.common.crypto.AESUtils;
 import java.text.DecimalFormat;
 import java.util.HashMap;
 import java.util.Map;
@@ -22,6 +23,7 @@ public class TemplateValueResolver {
   private final UserRepository userRepository;
   private final BillingSettlementRepository billingSettlementRepository;
   private final ObjectMapper objectMapper;
+  private final AESUtils aesUtils;
 
   // 생성자 시그니처 유지용 (외부 코드 수정 금지)
   @SuppressWarnings("unused")
@@ -38,8 +40,8 @@ public class TemplateValueResolver {
         .orElseThrow(() -> new IllegalArgumentException("유저 없음"));
 
     values.put("userName", safe(user.getName()));
-    values.put("email", safe(user.getEmail()));
-    values.put("phone", safe(user.getPhone()));
+    values.put("email", aesUtils.decrypt(safe(user.getEmail())));
+    values.put("phone", aesUtils.decrypt(safe(user.getPhone())));
 
     // 2) Reservation
     MessageReservation reservation = sendResult.getReservation();
@@ -121,7 +123,8 @@ public class TemplateValueResolver {
     values.putIfAbsent("discountAmount", formatMoney(0L));
     values.putIfAbsent("totalDiscount", formatMoney(0L));
     values.putIfAbsent("billingMonth", values.getOrDefault("targetMonth", ""));
-    values.putIfAbsent("usageAmount", values.getOrDefault("totalPrice", values.getOrDefault("chargedPrice", "")));
+    values.putIfAbsent("usageAmount",
+        values.getOrDefault("totalPrice", values.getOrDefault("chargedPrice", "")));
     values.putIfAbsent("discountAmount", values.getOrDefault("totalDiscount", ""));
 
     // 4) variables_json 기반 커스텀 정책 적용
@@ -137,31 +140,39 @@ public class TemplateValueResolver {
   }
 
   private TemplateValueResolverOptions resolveOptions(MessageTemplate template) {
-    boolean isCustom = template.getVariablesJson() != null && !template.getVariablesJson().isBlank();
+    boolean isCustom =
+        template.getVariablesJson() != null && !template.getVariablesJson().isBlank();
     return isCustom ? TemplateValueResolverOptions.strictOptions()
-                    : TemplateValueResolverOptions.defaultOptions();
+        : TemplateValueResolverOptions.defaultOptions();
   }
 
   private JsonNode firstNonNull(JsonNode node, String... keys) {
-    if (node == null) return null;
+    if (node == null) {
+      return null;
+    }
     for (String k : keys) {
       JsonNode v = node.get(k);
-      if (v != null && !v.isNull() && !v.isMissingNode()) return v;
+      if (v != null && !v.isNull() && !v.isMissingNode()) {
+        return v;
+      }
     }
     return null;
   }
 
   private long readLong(JsonNode node) {
-    if (node == null || node.isMissingNode() || node.isNull())
+    if (node == null || node.isMissingNode() || node.isNull()) {
       return 0L;
+    }
 
-    if (node.isNumber())
+    if (node.isNumber()) {
       return node.asLong();
+    }
 
     if (node.isTextual()) {
       String s = node.asText().replace(",", "").trim();
-      if (s.isBlank())
+      if (s.isBlank()) {
         return 0L;
+      }
       try {
         return Long.parseLong(s);
       } catch (Exception e) {

@@ -1,5 +1,7 @@
 package com.example.messagesender.service;
 
+import com.example.messagesender.common.crypto.AESUtils;
+import com.example.messagesender.domain.user.User;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -48,6 +50,7 @@ public class MessageProcessService {
   private final CodeCache codeCache;
   private final ScheduledExecutorService emailDelayScheduler;
   private final TransactionTemplate transactionTemplate;
+  private final AESUtils aesUtils;
 
   private final UserRepository userRepository;
   private final BillingSettlementRepository billingSettlementRepository;
@@ -88,6 +91,9 @@ public class MessageProcessService {
     int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
         STATUS_WAITING, STATUS_FAILED);
 
+    User user = userRepository.findById(result.getUserId())
+        .orElseThrow(() -> new IllegalArgumentException("사용자 없음"));
+
     if (updated == 0) {
       log.info("[SKIP] already processed or not eligible. id={}", messageId);
       return;
@@ -100,19 +106,15 @@ public class MessageProcessService {
           .orElseThrow(() -> new IllegalArgumentException("템플릿 없음"));
 
       TemplateValueResolver resolver = new TemplateValueResolver(userRepository,
-          billingSettlementRepository, objectMapper, chargedHistoryRepository);
+          billingSettlementRepository, objectMapper, aesUtils, chargedHistoryRepository);
 
       Map<String, String> values = resolver.resolve(result, template);
       // values 전체 로
       log.info("[VALUES] messageId={} templateId={}", messageId, template.getId());
       values.forEach((k, v) -> log.info("  - {} = {}", k, v));
-      
+
       MessageTemplateEngine engine = new MessageTemplateEngine();
       rendered = engine.render(template.getTitle(), template.getBody(), values);
-
-      log.info("[RENDERED] title='{}'", rendered.getTitle());
-      log.info("[RENDERED] body='{}'", rendered.getBody());
-
     } catch (Exception e) {
       messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
       log.error("[FAIL] template rendering failed. id={}", messageId, e);
@@ -124,18 +126,21 @@ public class MessageProcessService {
     MessageSender sender = messageSenderFactory.getSender(channel);
 
     if (channel == MessageChannel.EMAIL) {
-      sendEmailWithDelay(messageId, sender, rendered.getBody());
+      String email = aesUtils.decrypt(user.getEmail());
+      sendEmailWithDelay(messageId, sender, email, rendered.getTitle(), rendered.getBody());
       return;
     }
 
-    sendSmsImmediately(messageId, sender, rendered.getBody());
+    String phone = aesUtils.decrypt(user.getPhone());
+    sendSmsImmediately(messageId, sender, phone, rendered.getBody());
   }
 
   /**
    * EMAIL 발송 (지연 후 성공/실패 확정)
    */
-  private void sendEmailWithDelay(Long messageId, MessageSender sender, String content) {
-    SendRequest request = new EmailSendRequest(messageId, "email@test.com", content);
+  private void sendEmailWithDelay(Long messageId, MessageSender sender, String email,
+      String title, String content) {
+    EmailSendRequest request = new EmailSendRequest(messageId, title, content, email);
 
     emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, request), 1,
         TimeUnit.SECONDS);
@@ -144,12 +149,15 @@ public class MessageProcessService {
   /**
    * SMS 즉시 발송 및 결과 확정
    */
-  private void sendSmsImmediately(Long messageId, MessageSender sender, String content) {
-    SendRequest request = new SmsSendRequest(messageId, "010-1234-1234", content);
+  private void sendSmsImmediately(Long messageId, MessageSender sender, String phone,
+      String content) {
+    SmsSendRequest request = new SmsSendRequest(messageId, content, phone);
 
     SendResult sendResult;
     try {
       sendResult = sender.mockSend(request);
+      log.info("[SMS SEND] phone='{}'", request.getPhone());
+      log.info("[SMS SEND] body='{}'", request.getContent());
     } catch (Exception e) {
       sendResult = SendResult.fail("SENDER_EXCEPTION");
     }
@@ -160,7 +168,7 @@ public class MessageProcessService {
   /**
    * EMAIL 지연 발송 후 상태 확정
    */
-  private void finalizeAfterDelay(Long messageId, MessageSender sender, SendRequest request) {
+  private void finalizeAfterDelay(Long messageId, MessageSender sender, EmailSendRequest request) {
     SendResult sendResult;
     try {
       sendResult = sender.mockSend(request);
@@ -169,7 +177,9 @@ public class MessageProcessService {
     }
 
     boolean success = sendResult != null && sendResult.isSuccess();
-
+    log.info("[EMAIL SEND] email='{}'", request.getEmail());
+    log.info("[EMAIL SEND] title='{}'", request.getTitle());
+    log.info("[EMAIL SEND] body='{}'", request.getContent());
     transactionTemplate.execute(status -> {
       if (success) {
         messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
