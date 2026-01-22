@@ -3,15 +3,14 @@ package com.example.messagesender.service;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-
 import com.example.messagesender.common.code.CodeCache;
 import com.example.messagesender.common.code.enums.CodeGroups;
 import com.example.messagesender.common.code.enums.MessageChannel;
@@ -34,7 +33,6 @@ import com.example.messagesender.service.template.MessageTemplateEngine;
 import com.example.messagesender.service.template.RenderedMessage;
 import com.example.messagesender.service.template.TemplateValueResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -57,10 +55,17 @@ public class MessageProcessService {
   private final ObjectMapper objectMapper;
   private final ChargedHistoryRepository chargedHistoryRepository;
 
+  @Value("${test.email.override:false}")
+  private boolean overrideEmail;
+
+  @Value("${test.email.to:}")
+  private String overrideEmailTo;
+
   private Long STATUS_PROCESSING;
   private Long STATUS_WAITING;
   private Long STATUS_SUCCESS;
   private Long STATUS_FAILED;
+
 
   /**
    * 메시지 상태 코드 ID 초기화
@@ -77,10 +82,7 @@ public class MessageProcessService {
   }
 
   /**
-   * Redis Stream으로 전달된 메시지 처리 진입점
-   *
-   * ✅ A안 반영(최소 수정): - process() 최상단 try/catch로 감싸서 어디서 예외가 터져도 "PROCESSING 상태가 박제"되지 않도록 가능한 경우
-   * FAILED로 확정한다.
+   * Redis Stream으로 전달된 메시지 처리 진입점 PROCESSING -> FAILED 확정
    */
   public void process(MessageRequestDto dto) {
 
@@ -143,7 +145,6 @@ public class MessageProcessService {
       sendSmsImmediately(messageId, sender, rendered.getBody());
 
     } catch (Exception e) {
-      // ✅ A안 핵심: 예외가 어디서 터져도 PROCESSING 박제 방지
       try {
         if (lockedToProcessing) {
           // markProcessing 성공 이후라면 PROCESSING -> FAILED 확정
@@ -151,7 +152,6 @@ public class MessageProcessService {
           log.error("[FAIL] processing failed -> marked FAILED. id={}", messageId, e);
         } else {
           // markProcessing 이전 예외: PROCESSING 박제는 아니므로 로그만
-          // (WAITING->FAILED 전환 같은 건 합의 필요하니 여기선 안 건드림)
           log.error("[FAIL] processing failed before markProcessing. id={}", messageId, e);
         }
       } catch (Exception fatal) {
@@ -165,7 +165,15 @@ public class MessageProcessService {
    * EMAIL 발송 (지연 후 성공/실패 확정)
    */
   private void sendEmailWithDelay(Long messageId, MessageSender sender, String content) {
-    SendRequest request = new EmailSendRequest(messageId, "email@test.com", content);
+
+    String to = "email@test.com";
+
+    if (overrideEmail && overrideEmailTo != null && !overrideEmailTo.isBlank()) {
+      to = overrideEmailTo; // fail@test.com 들어가게
+      log.info("[TEST-EMAIL-OVERRIDE] force email to={}", to);
+    }
+
+    SendRequest request = new EmailSendRequest(messageId, content, to);
 
     emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, request), 1,
         TimeUnit.SECONDS);
@@ -227,7 +235,7 @@ public class MessageProcessService {
     }
   }
 
-  // 메시지 처리 중 예외 발생 시 FAILED 상태로 확정하는 트랜잭션 (WorkerRunnable용)
+  // 메시지 처리 중 예외 발생 시 FAILED 상태로 확정하는 트랜잭션
   public void markFailed(Long messageSendResultId, Exception e) {
 
     int updated = messageSendResultRepository.markFailed(messageSendResultId, STATUS_PROCESSING,

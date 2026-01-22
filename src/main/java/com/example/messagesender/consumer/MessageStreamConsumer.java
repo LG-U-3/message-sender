@@ -14,8 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 
 @Component
 @RequiredArgsConstructor
-public class MessageStreamConsumer implements
-    StreamListener<String, MapRecord<String, String, String>> {
+public class MessageStreamConsumer
+    implements StreamListener<String, MapRecord<String, String, String>> {
 
   private final ExecutorService workerExecutorService;
   private final MessageProcessService messageProcessService;
@@ -39,10 +39,8 @@ public class MessageStreamConsumer implements
 
     RecordId messageId = message.getId();
 
-    workerExecutorService
-        .submit(
-            new WorkerRunnable(messageProcessService, streamKey, group, messageId, requestDto,
-                redisTemplate));
+    workerExecutorService.submit(new WorkerRunnable(messageProcessService, streamKey, group,
+        messageId, requestDto, redisTemplate));
   }
 
   public String consumerName() {

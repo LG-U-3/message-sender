@@ -21,3 +21,7 @@ spring:
 message:
   stream: message-stream
   group: message-group
+  recovery:
+    timeout-minutes: 60          # 1시간
+    fixed-delay-ms: 300000       # 5분마다 복구 작업
+    claim-count: 100

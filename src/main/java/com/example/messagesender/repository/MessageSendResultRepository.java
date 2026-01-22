@@ -1,10 +1,13 @@
 package com.example.messagesender.repository;
 
-import com.example.messagesender.domain.message.MessageSendResult;
+import java.time.LocalDateTime;
+import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import com.example.messagesender.domain.message.MessageSendResult;
 
 public interface MessageSendResultRepository extends JpaRepository<MessageSendResult, Long> {
 
@@ -45,4 +48,27 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
       """)
   int markFailed(@Param("id") Long id, @Param("processingStatusId") Long processingStatusId,
       @Param("failedStatusId") Long failedStatusId);
+
+  // ✅ timeout 대상 id 목록 조회 (PROCESSING & requestedAt <= threshold)
+  @Query("""
+      select msr.id
+      from MessageSendResult msr
+      where msr.status.id = :processingStatusId
+        and msr.requestedAt <= :threshold
+      """)
+  List<Long> findProcessingTimeoutIds(@Param("processingStatusId") Long processingStatusId,
+      @Param("threshold") LocalDateTime threshold, Pageable pageable);
+
+  // ✅ PROCESSING -> FAILED 벌크 업데이트
+  @Modifying(clearAutomatically = true, flushAutomatically = true)
+  @Query("""
+      update MessageSendResult msr
+      set msr.status.id = :failedStatusId
+      where msr.id in :ids
+        and msr.status.id = :processingStatusId
+      """)
+  int markFailedByIds(@Param("ids") List<Long> ids,
+      @Param("processingStatusId") Long processingStatusId,
+      @Param("failedStatusId") Long failedStatusId);
+
 }

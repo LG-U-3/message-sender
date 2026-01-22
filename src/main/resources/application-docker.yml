@@ -26,6 +26,10 @@ spring:
 message:
   stream: message-stream
   group: message-group
+  recovery:
+    timeout-minutes: 1
+    fixed-delay-ms: 300000
+    claim-count: 100
 
 redis:
   stream:

@@ -36,28 +36,31 @@ public class WorkerRunnable implements Runnable {
     Long msrId = request.getMessageSendResultId();
 
     try {
-
       messageProcessService.process(request);
 
-      Long acked = ack();
-      log.info("메시지 처리 완료 -> ACK. messageSendResultId={}, acked={}", msrId, acked);
+      // → pending 유지
+      // Long acked = ack();
+      // log.info("메시지 처리 완료 -> ACK. messageSendResultId={}, acked={}", msrId, acked);
+
+      log.info("메시지 처리 완료(ACK 주석처리 -> pending 유지). messageSendResultId={}", msrId);
 
     } catch (Exception e) {
 
       try {
         messageProcessService.markFailed(msrId, e);
-        Long acked = ack();
-        log.error("메시지 처리 중 예외(최후 처리) -> FAILED 업데이트 후 ACK. messageSendResultId={}, acked={}",
-            msrId, acked, e);
+
+        // → pending 유지
+        // Long acked = ack();
+        // log.error("메시지 처리 중 예외(최후 처리) -> FAILED 업데이트 후 ACK. messageSendResultId={}, acked={}",
+        // msrId, acked, e);
+
+        log.error("메시지 처리 중 예외 -> FAILED 업데이트(ACK 주석처리 -> pending 유지). messageSendResultId={}",
+            msrId, e);
 
       } catch (Exception fatal) {
-        // 여기서 실패하면 ACK 미수행 → pending 유지(추후 recovery(B안)에서 회수 대상)
+        // 여기서 실패하면 ACK 미수행 → pending 유지(추후 recovery에서 회수 대상)
         log.error("FAIL-HANDLER 실패(ACK 미수행, pending 유지). messageSendResultId={}", msrId, fatal);
       }
     }
-  }
-
-  private Long ack() {
-    return redisTemplate.opsForStream().acknowledge(streamKey, group, messageId);
   }
 }
