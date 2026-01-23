@@ -36,7 +36,7 @@ public class EmailSenderMock implements MessageSender {
     // 0~99 중 0~98 성공(99%), 99 실패(1%)
     int r = ThreadLocalRandom.current().nextInt(100);
 
-    if (r < 98) {
+    if (r < 99) {
       return SendResult.ok();
     }
     return SendResult.fail("EMAIL_SEND_FAILED");
