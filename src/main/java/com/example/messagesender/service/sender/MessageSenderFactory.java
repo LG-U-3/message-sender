@@ -15,11 +15,8 @@ public class MessageSenderFactory {
   private final Map<MessageChannel, MessageSender> senderMap;
 
   public MessageSenderFactory(List<MessageSender> senders) {
-    this.senderMap = senders.stream()
-        .collect(Collectors.toMap(
-            MessageSender::channel,
-            Function.identity()
-        ));
+    this.senderMap =
+        senders.stream().collect(Collectors.toMap(MessageSender::channel, Function.identity()));
   }
 
   public MessageSender getSender(MessageChannel channel) {
