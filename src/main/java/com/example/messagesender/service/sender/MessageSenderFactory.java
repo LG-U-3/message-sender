@@ -1,7 +1,6 @@
 package com.example.messagesender.service.sender;
 
 import com.example.messagesender.common.code.enums.MessageChannel;
-import com.example.messagesender.domain.code.Code;
 import com.example.messagesender.sender.MessageSender;
 import java.util.List;
 import java.util.Map;

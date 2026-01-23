@@ -43,27 +43,20 @@ public class MessageReservation {
   @JoinColumn(name = "template_id", nullable = false)
   private MessageTemplate template;
 
-  @Column(name = "template_type_id", nullable = false, length = 10)
-  private String templateTypeId;
-
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "user_group_id", nullable = false)
   private UserGroup userGroup;
+  @Column(name = "target_month", nullable = false, length = 7)
+  private String targetMonth;
 
   @Builder
-  private MessageReservation(
-      LocalDateTime scheduledAt,
-      Code status,
-      Code channelType,
-      MessageTemplate template,
-      String templateTypeId,
-      UserGroup userGroup
-  ) {
+  private MessageReservation(LocalDateTime scheduledAt, Code status, Code channelType,
+      MessageTemplate template, String templateTypeId, UserGroup userGroup, String targetMonth) {
     this.scheduledAt = scheduledAt;
     this.status = status;
     this.channelType = channelType;
     this.template = template;
-    this.templateTypeId = templateTypeId;
     this.userGroup = userGroup;
+    this.targetMonth = targetMonth;
   }
 }

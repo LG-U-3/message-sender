@@ -2,12 +2,15 @@ package com.example.messagesender.sender;
 
 import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.dto.send.EmailSendRequest;
 import com.example.messagesender.dto.send.SendRequest;
 import com.example.messagesender.dto.send.SendResult;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ThreadLocalRandom;
 
+@Slf4j
 @Component
 public class EmailSenderMock implements MessageSender {
 
@@ -18,6 +21,13 @@ public class EmailSenderMock implements MessageSender {
 
   @Override
   public SendResult mockSend(SendRequest request) {
+    EmailSendRequest emailRequest = (EmailSendRequest) request;
+    log.info(
+        "[EMAIL] title='{}', body='{}', to='{}'",
+        emailRequest.getTitle(),
+        emailRequest.getContent(),
+        emailRequest.getEmail()
+    );
     return this.send(request);
   }
 

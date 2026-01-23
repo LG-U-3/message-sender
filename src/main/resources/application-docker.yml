@@ -32,8 +32,8 @@ redis:
     message:
       key: message-stream
       group: message-group
-      poll-timeout-ms: 500
-      batch-size: 10
+      poll-timeout-ms: 1000
+      batch-size: 100
       consumer: ${HOSTNAME}   # 컨테이너마다 자동으로 다른 consumer
 
 logging:
