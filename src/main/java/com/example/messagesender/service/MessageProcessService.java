@@ -88,31 +88,13 @@ public class MessageProcessService {
   public void process(MessageRequestDto dto) {
 
     Long messageId = dto.getMessageSendResultId();
-
-    // WAITING/FAILED(processedAt null) 선점
-    int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
-        STATUS_WAITING, STATUS_FAILED);
-
-    // FAILED 재시도 선점 (retryCount + 1, processedAt=null)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
-    if (updated == 0) {
-      updated = messageSendResultRepository.markRetryProcessing(messageId, STATUS_PROCESSING,
-          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT);
-    }
-
-    // EXCEEDED SMS fallback 선점 (retryCount 그대로, channel=SMS로 기록)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
-    if (updated == 0) {
-      updated = messageSendResultRepository.markExceededProcessing(messageId, STATUS_PROCESSING,
-          STATUS_EXCEEDED, CHANNEL_SMS_ID);
-    }
-
-    if (updated == 0) {
-      return;
-    }
-
     MessageSendResult result = messageSendResultRepository.findById(messageId)
         .orElseThrow(() -> new IllegalArgumentException("메시지 없음: id=" + messageId));
+
+    Long status = result.getStatus().getId();
+    if (!status.equals(STATUS_WAITING) && !status.equals(STATUS_PROCESSING)) {
+      return;
+    }
 
     User user = userRepository.findById(result.getUserId())
         .orElseThrow(
@@ -148,7 +130,7 @@ public class MessageProcessService {
       EmailSendRequest req = new EmailSendRequest(messageId, title, content, email);
 
       // Email은 1초 후 확정
-      emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, req), 1,
+      emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, status, sender, req), 1,
           TimeUnit.SECONDS);
       return;
     }
@@ -158,13 +140,14 @@ public class MessageProcessService {
     String phone = user.getPhone();
     SmsSendRequest req = new SmsSendRequest(messageId, content, phone);
 
-    finalizeNow(messageId, sender, req);
+    finalizeNow(messageId, status, sender, req);
   }
 
   /**
    * EMAIL 지연 발송 후 상태 확정
    */
-  private void finalizeAfterDelay(Long messageId, MessageSender sender, EmailSendRequest request) {
+  private void finalizeAfterDelay(Long messageId, Long status, MessageSender sender,
+      EmailSendRequest request) {
     SendResult sendResult;
     try {
       sendResult = sender.mockSend(request);
@@ -175,12 +158,7 @@ public class MessageProcessService {
     boolean success = sendResult != null && sendResult.isSuccess();
 
     transactionTemplate.execute(tx -> {
-      if (success) {
-        messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
-      } else {
-        messageSendResultRepository.markFailedOrExceeded(messageId, STATUS_PROCESSING,
-            STATUS_FAILED, STATUS_EXCEEDED, MAX_EMAIL_RETRY_COUNT);
-      }
+      this.markResult(success, status, messageId);
       return null;
     });
   }
@@ -188,7 +166,7 @@ public class MessageProcessService {
   /**
    * SMS 발송 결과 즉시 확정
    */
-  private void finalizeNow(Long messageId, MessageSender sender, SmsSendRequest req) {
+  private void finalizeNow(Long messageId, Long status, MessageSender sender, SmsSendRequest req) {
     SendResult sendResult;
     try {
       sendResult = sender.mockSend(req);
@@ -197,11 +175,33 @@ public class MessageProcessService {
     }
     boolean success = sendResult != null && sendResult.isSuccess();
 
-    if (success) {
-      messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
+    this.markResult(success, status, messageId);
+  }
+
+  void markResult(boolean isSuccess, Long status, Long messageId) {
+    if (status.equals(STATUS_WAITING)) {
+      if (isSuccess) {
+        messageSendResultRepository.markSuccessFromWaiting(
+            messageId, STATUS_WAITING, STATUS_SUCCESS);
+      } else {
+        messageSendResultRepository.markFailedFromWaiting(
+            messageId, STATUS_WAITING, STATUS_FAILED);
+      }
+      return;
+    }
+
+    // status == PROCESSING (재시도)
+    if (isSuccess) {
+      messageSendResultRepository.markSuccessFromProcessing(
+          messageId, STATUS_PROCESSING, STATUS_SUCCESS);
     } else {
-      messageSendResultRepository.markFailedOrExceeded(messageId, STATUS_PROCESSING, STATUS_FAILED,
-          STATUS_EXCEEDED, MAX_EMAIL_RETRY_COUNT);
+      messageSendResultRepository.markFailedOrExceededFromProcessing(
+          messageId,
+          STATUS_PROCESSING,
+          STATUS_FAILED,
+          STATUS_EXCEEDED,
+          MAX_EMAIL_RETRY_COUNT
+      );
     }
   }
 }
