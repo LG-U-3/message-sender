@@ -2,15 +2,15 @@ package com.example.messagesender.sender;
 
 import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.dto.send.EmailSendRequest;
 import com.example.messagesender.dto.send.SendRequest;
 import com.example.messagesender.dto.send.SendResult;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ThreadLocalRandom;
 
-// 1초 delay 는 Worker 에서 nextAttemptAt 으로 제어 예정
-// 이 부분이 sender 가 아니라 service 에서 처리하는게 더 나을 것 같습니다
-// 역할도 역할이지만 sender 를 병렬처리하는 것보다 service 를 병렬처리하는게 더 낫다고 생각합니다.
+@Slf4j
 @Component
 public class EmailSenderMock implements MessageSender {
 
@@ -21,7 +21,13 @@ public class EmailSenderMock implements MessageSender {
 
   @Override
   public SendResult mockSend(SendRequest request) {
-    // TODO: nextAttemptAt 1초 후 예약(성범)
+    EmailSendRequest emailRequest = (EmailSendRequest) request;
+    log.info(
+        "[EMAIL] title='{}', body='{}', to='{}'",
+        emailRequest.getTitle(),
+        emailRequest.getContent(),
+        emailRequest.getEmail()
+    );
     return this.send(request);
   }
 

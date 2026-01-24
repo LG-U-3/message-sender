@@ -1,45 +1,43 @@
 package com.example.messagesender.service;
 
-import java.util.Map;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 import com.example.messagesender.common.code.CodeCache;
 import com.example.messagesender.common.code.enums.CodeGroups;
 import com.example.messagesender.common.code.enums.MessageChannel;
 import com.example.messagesender.common.code.enums.MessageSendStatus;
 import com.example.messagesender.domain.message.MessageSendResult;
-import com.example.messagesender.domain.message.MessageTemplate;
+import com.example.messagesender.domain.user.User;
 import com.example.messagesender.dto.MessageRequestDto;
 import com.example.messagesender.dto.send.EmailSendRequest;
-import com.example.messagesender.dto.send.SendRequest;
 import com.example.messagesender.dto.send.SendResult;
 import com.example.messagesender.dto.send.SmsSendRequest;
-import com.example.messagesender.repository.BillingSettlementRepository;
-import com.example.messagesender.repository.ChargedHistoryRepository;
 import com.example.messagesender.repository.MessageSendResultRepository;
 import com.example.messagesender.repository.MessageTemplateRepository;
-import com.example.messagesender.repository.UserRepository;
 import com.example.messagesender.sender.MessageSender;
 import com.example.messagesender.service.sender.MessageSenderFactory;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import com.example.messagesender.domain.message.MessageTemplate;
+import com.example.messagesender.repository.BillingSettlementRepository;
+import com.example.messagesender.repository.ChargedHistoryRepository;
+import com.example.messagesender.repository.UserRepository;
 import com.example.messagesender.service.template.MessageTemplateEngine;
 import com.example.messagesender.service.template.RenderedMessage;
 import com.example.messagesender.service.template.TemplateValueResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional
 public class MessageProcessService {
-
-  private static final Logger log = LoggerFactory.getLogger(MessageProcessService.class);
 
   private final MessageSendResultRepository messageSendResultRepository;
   private final MessageTemplateRepository messageTemplateRepository;
@@ -58,6 +56,12 @@ public class MessageProcessService {
   private Long STATUS_WAITING;
   private Long STATUS_SUCCESS;
   private Long STATUS_FAILED;
+  private Long STATUS_EXCEEDED;
+
+  private Long CHANNEL_SMS_ID;
+
+  // EMAIL은 retry_count 0/1/2 까지 (최초 + 재시도1 + 재시도2)
+  private static final int MAX_EMAIL_RETRY_COUNT = 2;
 
   /**
    * 메시지 상태 코드 ID 초기화
@@ -70,7 +74,12 @@ public class MessageProcessService {
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.WAITING);
     this.STATUS_SUCCESS =
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.SUCCESS);
-    this.STATUS_FAILED = codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.FAILED);
+    this.STATUS_FAILED =
+        codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.FAILED);
+    this.STATUS_EXCEEDED =
+        codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.EXCEEDED);
+
+    this.CHANNEL_SMS_ID = codeCache.getId(CodeGroups.MESSAGE_CHANNEL, MessageChannel.SMS);
   }
 
   /**
@@ -78,22 +87,38 @@ public class MessageProcessService {
    */
   public void process(MessageRequestDto dto) {
 
-    final Long messageId = dto.getMessageSendResultId();
-    log.info("[STREAM] messageSendResultId={}", messageId);
+    Long messageId = dto.getMessageSendResultId();
 
-    MessageSendResult result = messageSendResultRepository.findById(messageId)
-        .orElseThrow(() -> new IllegalArgumentException("메시지 없음"));
-
-    // 처리 대상 선점 (중복 처리 방지)
+    // WAITING/FAILED(processedAt null) 선점
     int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
         STATUS_WAITING, STATUS_FAILED);
 
+    // FAILED 재시도 선점 (retryCount + 1, processedAt=null)
+    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
     if (updated == 0) {
-      log.info("[SKIP] already processed or not eligible. id={}", messageId);
+      updated = messageSendResultRepository.markRetryProcessing(messageId, STATUS_PROCESSING,
+          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT);
+    }
+
+    // EXCEEDED SMS fallback 선점 (retryCount 그대로, channel=SMS로 기록)
+    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
+    if (updated == 0) {
+      updated = messageSendResultRepository.markExceededProcessing(messageId, STATUS_PROCESSING,
+          STATUS_EXCEEDED, CHANNEL_SMS_ID);
+    }
+
+    if (updated == 0) {
       return;
     }
 
-    // 템플릿 치환
+    MessageSendResult result = messageSendResultRepository.findById(messageId)
+        .orElseThrow(() -> new IllegalArgumentException("메시지 없음: id=" + messageId));
+
+    User user = userRepository.findById(result.getUserId())
+        .orElseThrow(
+            () -> new IllegalArgumentException("사용자 정보 없음: user_id=" + result.getUserId()));
+
+    // 템플릿 치환 TODO: 템플릿 PURPOSE_TYPE=BILLING인 경우 정산서 처리, 아닌 경우 일반 템플릿 처리
     RenderedMessage rendered;
     try {
       MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
@@ -103,20 +128,13 @@ public class MessageProcessService {
           billingSettlementRepository, objectMapper, chargedHistoryRepository);
 
       Map<String, String> values = resolver.resolve(result, template);
-      // values 전체 로
-      log.info("[VALUES] messageId={} templateId={}", messageId, template.getId());
-      values.forEach((k, v) -> log.info("  - {} = {}", k, v));
-      
+      values.forEach((k, v) -> log.info("  - {} = {}", k, v)); // TODO: 불필요한 로그 제거 부탁드려요.
+
       MessageTemplateEngine engine = new MessageTemplateEngine();
       rendered = engine.render(template.getTitle(), template.getBody(), values);
-
-      log.info("[RENDERED] title='{}'", rendered.getTitle());
-      log.info("[RENDERED] body='{}'", rendered.getBody());
-
     } catch (Exception e) {
-      messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
       log.error("[FAIL] template rendering failed. id={}", messageId, e);
-      return;
+      throw e;
     }
 
     // 채널별 발송 처리
@@ -124,43 +142,29 @@ public class MessageProcessService {
     MessageSender sender = messageSenderFactory.getSender(channel);
 
     if (channel == MessageChannel.EMAIL) {
-      sendEmailWithDelay(messageId, sender, rendered.getBody());
+      String title = rendered.getTitle();
+      String content = rendered.getBody();
+      String email = user.getEmail();
+      EmailSendRequest req = new EmailSendRequest(messageId, title, content, email);
+
+      // Email은 1초 후 확정
+      emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, req), 1,
+          TimeUnit.SECONDS);
       return;
     }
 
-    sendSmsImmediately(messageId, sender, rendered.getBody());
-  }
+    // SMS는 즉시 처리
+    String content = rendered.getBody();
+    String phone = user.getPhone();
+    SmsSendRequest req = new SmsSendRequest(messageId, content, phone);
 
-  /**
-   * EMAIL 발송 (지연 후 성공/실패 확정)
-   */
-  private void sendEmailWithDelay(Long messageId, MessageSender sender, String content) {
-    SendRequest request = new EmailSendRequest(messageId, "email@test.com", content);
-
-    emailDelayScheduler.schedule(() -> finalizeAfterDelay(messageId, sender, request), 1,
-        TimeUnit.SECONDS);
-  }
-
-  /**
-   * SMS 즉시 발송 및 결과 확정
-   */
-  private void sendSmsImmediately(Long messageId, MessageSender sender, String content) {
-    SendRequest request = new SmsSendRequest(messageId, "010-1234-1234", content);
-
-    SendResult sendResult;
-    try {
-      sendResult = sender.mockSend(request);
-    } catch (Exception e) {
-      sendResult = SendResult.fail("SENDER_EXCEPTION");
-    }
-
-    finalizeNow(messageId, sendResult);
+    finalizeNow(messageId, sender, req);
   }
 
   /**
    * EMAIL 지연 발송 후 상태 확정
    */
-  private void finalizeAfterDelay(Long messageId, MessageSender sender, SendRequest request) {
+  private void finalizeAfterDelay(Long messageId, MessageSender sender, EmailSendRequest request) {
     SendResult sendResult;
     try {
       sendResult = sender.mockSend(request);
@@ -170,13 +174,12 @@ public class MessageProcessService {
 
     boolean success = sendResult != null && sendResult.isSuccess();
 
-    transactionTemplate.execute(status -> {
+    transactionTemplate.execute(tx -> {
       if (success) {
         messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
-        log.info("[FINAL] EMAIL SUCCESS id={}", messageId);
       } else {
-        messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
-        log.info("[FINAL] EMAIL FAILED id={}", messageId);
+        messageSendResultRepository.markFailedOrExceeded(messageId, STATUS_PROCESSING,
+            STATUS_FAILED, STATUS_EXCEEDED, MAX_EMAIL_RETRY_COUNT);
       }
       return null;
     });
@@ -185,15 +188,20 @@ public class MessageProcessService {
   /**
    * SMS 발송 결과 즉시 확정
    */
-  private void finalizeNow(Long messageId, SendResult sendResult) {
+  private void finalizeNow(Long messageId, MessageSender sender, SmsSendRequest req) {
+    SendResult sendResult;
+    try {
+      sendResult = sender.mockSend(req);
+    } catch (Exception e) {
+      sendResult = SendResult.ok();
+    }
     boolean success = sendResult != null && sendResult.isSuccess();
 
     if (success) {
       messageSendResultRepository.markSuccess(messageId, STATUS_PROCESSING, STATUS_SUCCESS);
-      log.info("[FINAL] SMS SUCCESS id={}", messageId);
     } else {
-      messageSendResultRepository.markFailed(messageId, STATUS_PROCESSING, STATUS_FAILED);
-      log.info("[FINAL] SMS FAILED id={}", messageId);
+      messageSendResultRepository.markFailedOrExceeded(messageId, STATUS_PROCESSING, STATUS_FAILED,
+          STATUS_EXCEEDED, MAX_EMAIL_RETRY_COUNT);
     }
   }
 }

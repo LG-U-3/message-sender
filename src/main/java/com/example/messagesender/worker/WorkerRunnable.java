@@ -19,13 +19,8 @@ public class WorkerRunnable implements Runnable {
   private final MessageRequestDto request;
   private final StringRedisTemplate redisTemplate;
 
-  public WorkerRunnable(
-      MessageProcessService messageProcessService,
-      String streamKey,
-      String group,
-      RecordId messageId,
-      MessageRequestDto request,
-      StringRedisTemplate redisTemplate) {
+  public WorkerRunnable(MessageProcessService messageProcessService, String streamKey, String group,
+      RecordId messageId, MessageRequestDto request, StringRedisTemplate redisTemplate) {
     this.messageProcessService = messageProcessService;
     this.streamKey = streamKey;
     this.group = group;
@@ -38,20 +33,14 @@ public class WorkerRunnable implements Runnable {
   public void run() {
     try {
       messageProcessService.process(request);
-
-      System.out.println("메시지 전송 처리 완료: " + request.getMessageSendResultId());
       ack();
     } catch (Exception e) { // 예외 발생 시 ACK 처리 하지 않고 PENDING 유지
-      log.error("메시지 처리 실패. pending 유지", e);
+      log.info("메시지 전송처리 예외 발생(pending):" + e.getMessage());
     }
   }
 
   private Long ack() {
-    Long acked = redisTemplate.opsForStream().acknowledge(
-        streamKey,
-        group,
-        messageId
-    );
+    Long acked = redisTemplate.opsForStream().acknowledge(streamKey, group, messageId);
     return acked;
   }
 }
