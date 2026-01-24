@@ -28,4 +28,4 @@ WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
 
 # 실행
-ENTRYPOINT ["java","-Xms128m","-Xmx384m","-jar","/app/app.jar"]
+ENTRYPOINT ["java", "-Xms256m", "-Xmx512m", "-Xss512k", "-jar", "/app/app.jar"]
