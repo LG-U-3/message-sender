@@ -60,6 +60,7 @@ public class MessageProcessService {
   private Long STATUS_EXCEEDED;
 
   private Long CHANNEL_SMS_ID;
+  private Long PURPOSE_BILLING_ID;
 
   // EMAIL은 retry_count 0/1/2 까지 (최초 + 재시도1 + 재시도2)
   private static final int MAX_EMAIL_RETRY_COUNT = 2;
@@ -81,6 +82,7 @@ public class MessageProcessService {
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.EXCEEDED);
 
     this.CHANNEL_SMS_ID = codeCache.getId(CodeGroups.MESSAGE_CHANNEL, MessageChannel.SMS);
+    this.PURPOSE_BILLING_ID = codeCache.getId(CodeGroups.MESSAGE_PURPOSE, MessagePurpose.BILLING);
   }
 
   /**
@@ -90,30 +92,35 @@ public class MessageProcessService {
 
     Long messageId = dto.getMessageSendResultId();
 
-    // WAITING/FAILED(processedAt null) 선점
-    int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
-        STATUS_WAITING, STATUS_FAILED);
-
-    // FAILED 재시도 선점 (retryCount + 1, processedAt=null)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
-    if (updated == 0) {
-      updated = messageSendResultRepository.markRetryProcessing(messageId, STATUS_PROCESSING,
-          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT);
-    }
-
-    // EXCEEDED SMS fallback 선점 (retryCount 그대로, channel=SMS로 기록)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
-    if (updated == 0) {
-      updated = messageSendResultRepository.markExceededProcessing(messageId, STATUS_PROCESSING,
-          STATUS_EXCEEDED, CHANNEL_SMS_ID);
-    }
-
-    if (updated == 0) {
-      return;
-    }
-
     MessageSendResult result = messageSendResultRepository.findById(messageId)
         .orElseThrow(() -> new IllegalArgumentException("메시지 없음: id=" + messageId));
+
+    if (result.getStatus().getId().equals(STATUS_WAITING)) {
+      // WAITING선점
+      int updated = messageSendResultRepository.markProcessing(messageId, STATUS_PROCESSING,
+          STATUS_WAITING);
+      if (updated == 0) {
+        return;
+      }
+    } else if (result.getStatus().getId().equals(STATUS_FAILED)) {
+      // FAILED 재시도 선점 (retryCount + 1, processedAt=null)
+      // 예약발송 템플릿 PURPOSE가 BILLING이 아닌 경우 제외
+      int updated = messageSendResultRepository.markRetryProcessing(messageId, STATUS_PROCESSING,
+          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT, PURPOSE_BILLING_ID);
+      if (updated == 0) {
+        return;
+      }
+    } else if (result.getStatus().getId().equals(STATUS_EXCEEDED)) {
+      // EXCEEDED SMS fallback 선점 (retryCount 그대로, channel=SMS로 기록)
+      // 예약발송 템플릿 PURPOSE가 BILLING이 아닌 경우 제외
+      int updated = messageSendResultRepository.markExceededProcessing(messageId, STATUS_PROCESSING,
+          STATUS_EXCEEDED, CHANNEL_SMS_ID, PURPOSE_BILLING_ID);
+      if (updated == 0) {
+        return;
+      }
+    } else {
+      return;
+    }
 
     User user = userRepository.findById(result.getUserId())
         .orElseThrow(
