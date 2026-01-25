@@ -1,37 +1,38 @@
 package com.example.messagesender.service;
 
-import com.example.messagesender.common.code.CodeCache;
-import com.example.messagesender.common.code.enums.CodeGroups;
-import com.example.messagesender.common.code.enums.MessageChannel;
-import com.example.messagesender.common.code.enums.MessageSendStatus;
-import com.example.messagesender.domain.message.MessageSendResult;
-import com.example.messagesender.domain.user.User;
-import com.example.messagesender.dto.MessageRequestDto;
-import com.example.messagesender.dto.send.EmailSendRequest;
-import com.example.messagesender.dto.send.SendResult;
-import com.example.messagesender.dto.send.SmsSendRequest;
-import com.example.messagesender.repository.MessageSendResultRepository;
-import com.example.messagesender.repository.MessageTemplateRepository;
-import com.example.messagesender.sender.MessageSender;
-import com.example.messagesender.service.sender.MessageSenderFactory;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import java.util.Map;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.example.messagesender.common.code.CodeCache;
+import com.example.messagesender.common.code.enums.CodeGroups;
+import com.example.messagesender.common.code.enums.MessageChannel;
+import com.example.messagesender.common.code.enums.MessagePurpose;
+import com.example.messagesender.common.code.enums.MessageSendStatus;
+import com.example.messagesender.domain.message.MessageSendResult;
 import com.example.messagesender.domain.message.MessageTemplate;
+import com.example.messagesender.domain.user.User;
+import com.example.messagesender.dto.MessageRequestDto;
+import com.example.messagesender.dto.send.EmailSendRequest;
+import com.example.messagesender.dto.send.SendResult;
+import com.example.messagesender.dto.send.SmsSendRequest;
 import com.example.messagesender.repository.BillingSettlementRepository;
 import com.example.messagesender.repository.ChargedHistoryRepository;
+import com.example.messagesender.repository.MessageSendResultRepository;
+import com.example.messagesender.repository.MessageTemplateRepository;
 import com.example.messagesender.repository.UserRepository;
+import com.example.messagesender.sender.MessageSender;
+import com.example.messagesender.service.sender.MessageSenderFactory;
 import com.example.messagesender.service.template.MessageTemplateEngine;
 import com.example.messagesender.service.template.RenderedMessage;
 import com.example.messagesender.service.template.TemplateValueResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Service
@@ -124,11 +125,14 @@ public class MessageProcessService {
       MessageTemplate template = messageTemplateRepository.findById(result.getTemplate().getId())
           .orElseThrow(() -> new IllegalArgumentException("템플릿 없음"));
 
-      TemplateValueResolver resolver = new TemplateValueResolver(userRepository,
-          billingSettlementRepository, objectMapper, chargedHistoryRepository);
+      String purposeCode = template.getPurposeType().getCode(); // 예: BILLING / NOTICE
+      MessagePurpose purpose = MessagePurpose.valueOf(purposeCode); // enum 필요
 
-      Map<String, String> values = resolver.resolve(result, template);
-      values.forEach((k, v) -> log.info("  - {} = {}", k, v)); // TODO: 불필요한 로그 제거 부탁드려요.
+      TemplateValueResolver resolver = new TemplateValueResolver(
+          userRepository, billingSettlementRepository, objectMapper, chargedHistoryRepository
+      );
+
+      Map<String, String> values = resolver.resolve(result, template, purpose);
 
       MessageTemplateEngine engine = new MessageTemplateEngine();
       rendered = engine.render(template.getTitle(), template.getBody(), values);

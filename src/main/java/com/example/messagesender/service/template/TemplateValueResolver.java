@@ -3,7 +3,7 @@ package com.example.messagesender.service.template;
 import java.text.DecimalFormat;
 import java.util.HashMap;
 import java.util.Map;
-
+import com.example.messagesender.common.code.enums.MessagePurpose;
 import com.example.messagesender.domain.billing.BillingSettlement;
 import com.example.messagesender.domain.message.MessageReservation;
 import com.example.messagesender.domain.message.MessageSendResult;
@@ -13,7 +13,6 @@ import com.example.messagesender.repository.ChargedHistoryRepository;
 import com.example.messagesender.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
@@ -29,7 +28,21 @@ public class TemplateValueResolver {
 
   private static final DecimalFormat MONEY = new DecimalFormat("#,###");
 
+  /**
+   * ✅ 기존 시그니처 유지(호환용)
+   * - 기존 호출 경로는 일단 BILLING으로 간주
+   */
   public Map<String, String> resolve(MessageSendResult sendResult, MessageTemplate template) {
+    return resolve(sendResult, template, MessagePurpose.BILLING);
+  }
+
+  /**
+   * ✅ 추가된 오버로드: purpose 기반 분기
+   * - NOTICE: User 변수만 채우고 커스텀 정책 적용 후 종료
+   * - BILLING: 기존 로직(Reservation/Settlement/detail_json) 그대로 수행
+   */
+  public Map<String, String> resolve(MessageSendResult sendResult, MessageTemplate template,
+      MessagePurpose purpose) {
 
     Map<String, String> values = new HashMap<>();
 
@@ -41,6 +54,12 @@ public class TemplateValueResolver {
     values.put("email", safe(user.getEmail()));
     values.put("phone", safe(user.getPhone()));
 
+    // NOTICE면 여기서 끝
+    if (purpose == MessagePurpose.NOTICE) {
+      applyCustomPolicy(template, values);
+      return values;
+    }
+
     // 2) Reservation
     MessageReservation reservation = sendResult.getReservation();
     if (reservation == null) {
@@ -50,9 +69,6 @@ public class TemplateValueResolver {
     String targetMonth = reservation.getTargetMonth();
     values.put("targetMonth", safe(targetMonth));
 
-    // UI alias
-    values.put("billingMonth", safe(targetMonth));
-
     // 3) Settlement (정산서가 단일 진실 소스)
     BillingSettlement settlement = billingSettlementRepository
         .findByUserIdAndTargetMonth(sendResult.getUserId(), targetMonth)
@@ -60,7 +76,6 @@ public class TemplateValueResolver {
 
     long finalAmount = settlement.getFinalAmount();
     values.put("finalAmount", formatMoney(finalAmount));
-    values.put("amount", formatMoney(finalAmount)); // UI에서 쓰는 키
 
     // 3-2) detail_json 파싱해서 value 맵 구성 (현재 DB는 ARRAY 구조)
     String detailJson = settlement.getDetailJson();
@@ -121,7 +136,8 @@ public class TemplateValueResolver {
     values.putIfAbsent("discountAmount", formatMoney(0L));
     values.putIfAbsent("totalDiscount", formatMoney(0L));
     values.putIfAbsent("billingMonth", values.getOrDefault("targetMonth", ""));
-    values.putIfAbsent("usageAmount", values.getOrDefault("totalPrice", values.getOrDefault("chargedPrice", "")));
+    values.putIfAbsent("usageAmount",
+        values.getOrDefault("totalPrice", values.getOrDefault("chargedPrice", "")));
     values.putIfAbsent("discountAmount", values.getOrDefault("totalDiscount", ""));
 
     // 4) variables_json 기반 커스텀 정책 적용
@@ -136,17 +152,29 @@ public class TemplateValueResolver {
     return values;
   }
 
+  private void applyCustomPolicy(MessageTemplate template, Map<String, String> values) {
+    TemplateValueResolverOptions options = resolveOptions(template);
+
+    TemplateVariablesParser parser = new TemplateVariablesParser(objectMapper);
+    var specMap = parser.parse(template.getVariablesJson());
+
+    TemplateValuesValidator validator = new TemplateValuesValidator();
+    validator.validateAndFilter(specMap, values, options);
+  }
+
   private TemplateValueResolverOptions resolveOptions(MessageTemplate template) {
     boolean isCustom = template.getVariablesJson() != null && !template.getVariablesJson().isBlank();
     return isCustom ? TemplateValueResolverOptions.strictOptions()
-                    : TemplateValueResolverOptions.defaultOptions();
+        : TemplateValueResolverOptions.defaultOptions();
   }
 
   private JsonNode firstNonNull(JsonNode node, String... keys) {
-    if (node == null) return null;
+    if (node == null)
+      return null;
     for (String k : keys) {
       JsonNode v = node.get(k);
-      if (v != null && !v.isNull() && !v.isMissingNode()) return v;
+      if (v != null && !v.isNull() && !v.isMissingNode())
+        return v;
     }
     return null;
   }
