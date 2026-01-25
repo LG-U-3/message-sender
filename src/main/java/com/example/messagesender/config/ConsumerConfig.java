@@ -9,10 +9,10 @@ import java.util.concurrent.*;
 @Configuration
 public class ConsumerConfig {
 
-  @Value("${worker.threads:20}")
+  @Value("${worker.threads:8}")
   private int workerThreads;
 
-  @Value("${worker.queue-capacity:2000}")
+  @Value("${worker.queue-capacity:500}")
   private int queueCapacity;
 
   @Bean(destroyMethod = "shutdown")
@@ -28,8 +28,9 @@ public class ConsumerConfig {
 
     RejectedExecutionHandler rejectHandler = (r, executor) -> {
       // 큐가 꽉 찼을 때: 호출자 스레드에서 실행 (백프레셔)
-      if (!executor.isShutdown())
+      if (!executor.isShutdown()) {
         r.run();
+      }
     };
 
     return new ThreadPoolExecutor(workerThreads, workerThreads, 0L, TimeUnit.MILLISECONDS, queue,
