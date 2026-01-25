@@ -15,15 +15,15 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
              set m.status.id = :processingStatusId
            where m.id = :id
              and m.processedAt is null
-             and m.status.id in (:waitingStatusId, :failedStatusId)
+             and m.status.id = :waitingStatusId
       """)
   int markProcessing(@Param("id") Long id, @Param("processingStatusId") Long processingStatusId,
-      @Param("waitingStatusId") Long waitingStatusId, @Param("failedStatusId") Long failedStatusId);
+      @Param("waitingStatusId") Long waitingStatusId);
 
   /**
    * FAILED 재시도 선점 (EMAIL 재시도 전용) 정책: - retryCount 0/1/2 까지는 EMAIL 재시도 - retryCount=2에서 실패하면
-   * EXCEEDED로 전환(별도 실패 확정 쿼리에서 처리) 여기서는 채널 변경 없음 (재시도 채널은 billing-batch에서 EMAIL 강제 publish)
-   * BILLING 만 허용
+   * EXCEEDED로 전환(별도 실패 확정 쿼리에서 처리) 여기서는 채널 변경 없음 (재시도 채널은 billing-batch에서 EMAIL 강제 publish) BILLING
+   * 만 허용
    */
   @Modifying
   @Query("""
