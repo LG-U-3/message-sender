@@ -36,9 +36,8 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
              and m.retryCount < :maxEmailRetryCount
              and exists (
                  select 1
-                   from MessageSendResult x
-                   join x.template t
-                  where x.id = m.id
+                   from MessageTemplate t
+                  where t.id = m.template.id
                     and t.purposeType.id = :billingPurposeTypeId
              )
       """)
@@ -62,9 +61,8 @@ public interface MessageSendResultRepository extends JpaRepository<MessageSendRe
              and m.status.id = :exceededStatusId
              and exists (
                  select 1
-                   from MessageSendResult x
-                   join x.template t
-                  where x.id = m.id
+                   from MessageTemplate t
+                  where t.id = m.template.id
                     and t.purposeType.id = :billingPurposeTypeId
              )
       """)
