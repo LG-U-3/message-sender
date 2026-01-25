@@ -60,6 +60,7 @@ public class MessageProcessService {
   private Long STATUS_EXCEEDED;
 
   private Long CHANNEL_SMS_ID;
+  private Long PURPOSE_BILLING_ID;
 
   // EMAIL은 retry_count 0/1/2 까지 (최초 + 재시도1 + 재시도2)
   private static final int MAX_EMAIL_RETRY_COUNT = 2;
@@ -81,6 +82,7 @@ public class MessageProcessService {
         codeCache.getId(CodeGroups.MESSAGE_SEND_STATUS, MessageSendStatus.EXCEEDED);
 
     this.CHANNEL_SMS_ID = codeCache.getId(CodeGroups.MESSAGE_CHANNEL, MessageChannel.SMS);
+    this.PURPOSE_BILLING_ID = codeCache.getId(CodeGroups.MESSAGE_PURPOSE, MessagePurpose.BILLING);
   }
 
   /**
@@ -95,17 +97,17 @@ public class MessageProcessService {
         STATUS_WAITING, STATUS_FAILED);
 
     // FAILED 재시도 선점 (retryCount + 1, processedAt=null)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
+    // 예약발송 템플릿 PURPOSE가 BILLING이 아닌 경우 제외
     if (updated == 0) {
       updated = messageSendResultRepository.markRetryProcessing(messageId, STATUS_PROCESSING,
-          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT);
+          STATUS_FAILED, MAX_EMAIL_RETRY_COUNT, PURPOSE_BILLING_ID);
     }
 
     // EXCEEDED SMS fallback 선점 (retryCount 그대로, channel=SMS로 기록)
-    // TODO: 예약발송 템플릿 PURPOSE가 BILLING이 아닌경우 제외해야함
+    // 예약발송 템플릿 PURPOSE가 BILLING이 아닌 경우 제외
     if (updated == 0) {
       updated = messageSendResultRepository.markExceededProcessing(messageId, STATUS_PROCESSING,
-          STATUS_EXCEEDED, CHANNEL_SMS_ID);
+          STATUS_EXCEEDED, CHANNEL_SMS_ID, PURPOSE_BILLING_ID);
     }
 
     if (updated == 0) {
